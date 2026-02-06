@@ -15,7 +15,20 @@ DEPENDENCIES: PySNMP, dotenv
 """
 
 import asyncio
-from pysnmp.hlapi.v3arch.asyncio import *
+from pysnmp.hlapi.v3arch.asyncio import (
+    SnmpEngine,
+    UsmUserData,
+    UdpTransportTarget,
+    ContextData,
+    ObjectType,
+    ObjectIdentity,
+    get_cmd,
+    set_cmd,
+    walk_cmd,
+    OctetString,
+    usmAesCfb128Protocol,
+    usmHMACMD5AuthProtocol
+)
 from dotenv import load_dotenv
 import os
 import re
@@ -33,7 +46,7 @@ credentials = UsmUserData(
     authProtocol = usmHMACMD5AuthProtocol
 )
 
-async def renaming_ports():
+async def renaming_ports() -> None:
     switch = input('Enter switch IP: ')
 
     # list of lists, contains the port oid and the value (host name pulled from LLDP)
@@ -66,7 +79,7 @@ async def renaming_ports():
 
 # finding_port_oid is used to find lldp neighbors on a switch, filter out any that don't qualify for regex,
 # and then send back a list of lists of OID port number and the actual host name eg.
-async def finding_port_oid(switch):
+async def finding_port_oid(switch: str) -> list[list[str]]:
     transport_target = await UdpTransportTarget.create((switch, 161))
 
     lldp_name_oid = "1.0.8802.1.1.2.1.4.1.1.9"
@@ -101,7 +114,7 @@ async def finding_port_oid(switch):
     return ap_oid_port_list
 
 # this function is used only to convert the port oid to a readable port number.
-async def convert_to_port(switch, oid):
+async def convert_to_port(switch: str, oid: str) -> str | None:
     transport_target = await UdpTransportTarget.create((switch, 161))
 
     port_desc_oid = '1.3.6.1.2.1.31.1.1.1.1.' + oid
@@ -113,7 +126,8 @@ async def convert_to_port(switch, oid):
         ContextData(),
         ObjectType(ObjectIdentity(port_desc_oid))
     )
-
+    
+    port_description = None
     errorIndication, errorStatus, errorIndex, varBinds = iterator
     if errorIndication:
         print(f"Error indication: {errorIndication}")
@@ -121,8 +135,8 @@ async def convert_to_port(switch, oid):
         print(f"Error status: {str(errorStatus)} at {errorIndex}")
     else:
         for varBind in varBinds:
-            value = varBind[1]
-            return value
+            port_description = varBind[1]
+    return port_description
 
 snmp_engine.close_dispatcher()
 

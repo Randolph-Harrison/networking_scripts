@@ -6,6 +6,16 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "dotenv>=0.9.9",
+    "mypy>=1.19.1",
     "netmiko>=4.6.0",
     "pysnmp>=7.1.22",
 ]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[[tool.mypy.overrides]]
+module = "pysnmp.*"
+ignore_missing_imports = true
+
