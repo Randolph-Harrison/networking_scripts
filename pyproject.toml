@@ -3,7 +3,7 @@ name = "networking-scripts"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 dependencies = [
     "dotenv>=0.9.9",
     "mypy>=1.19.1",
@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 strict = true
 
 [[tool.mypy.overrides]]
