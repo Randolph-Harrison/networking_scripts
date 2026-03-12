@@ -1,0 +1,13 @@
+[project]
+name = "renaming-port-script"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "dotenv>=0.9.9",
+    "httpx>=0.28.1",
+    "mypy>=1.19.1",
+    "pyinstaller>=6.19.0",
+    "pysnmp>=7.1.22",
+]
