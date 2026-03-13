@@ -1,13 +1,15 @@
 ### Setup and Dependencies
 Uses uv as a package manager, Python 3.14
-* pysnmp
-* dotenv
+
+Use "uv sync" to grab all dependencies, listed in uv.lock file
 
 Add the SNMP credentials to the .env.example and then delete the ".example" out of the file name after
 
 SNMP_USER\
 SNMP_PASS\
-SNMP_PRIV
+SNMP_PRIV\
+SNMP_USER\
+SNMP_PASS
 
 ### Basic SNMP
 SNMP is a protocol that interacts with a device's System MIB (Management Information Base). System MIBs are basically tree structures, usually looking like this:

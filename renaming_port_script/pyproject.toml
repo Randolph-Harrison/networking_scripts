@@ -9,6 +9,7 @@ dependencies = [
     "dotenv>=0.9.9",
     "httpx>=0.28.1",
     "mypy>=1.19.1",
+    "netmiko>=4.6.0",
     "pyinstaller>=6.19.0",
     "pysnmp>=7.1.22",
 ]

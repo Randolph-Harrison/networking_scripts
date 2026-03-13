@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*- 
 
 """
 PURPOSE: Updates interface descriptions based on LLDP data. To set up running, a .env file
-         with SNMP_USER, SNMP_PASS, and SNMP_PRIV defined needs to be created.
+         with SNMP_USER, SNMP_PASS, and SNMP_PRIV defined needs to be created. Strictly for Extreme
+         switches (EXOS, ERS)
 
-AUTHOR: Randolph Harrison | Downstate WAN Department
+AUTHOR: Randolph Harrison
 
 DATE: 2026-02-05
 
-USAGE: uv run renaming_ports.py (can compile into executable with pyinstaller)
+USAGE: Use the .exe in dist, or run the .py file directly using 'uv run renaming_ports.py'
 
-DEPENDENCIES: PySNMP, dotenv, pyinstaller
+DEPENDENCIES: PySNMP, dotenv, pyinstaller, netmiko
 """
 
 import asyncio
@@ -21,20 +22,20 @@ from pysnmp.hlapi.v3arch.asyncio import ( # type: ignore
     usmAesCfb128Protocol,
     usmHMACMD5AuthProtocol,
     UdpTransportTarget,
-    walk_cmd,
     ContextData,
     ObjectType,
     ObjectIdentity,
-    set_cmd,
     OctetString,
-    get_cmd
+    get_cmd,
+    set_cmd,
+    walk_cmd
 )
 from dotenv import load_dotenv
 import os
 import re
 import platform
 import subprocess
-import httpx
+from netmiko import ConnectHandler
 
 load_dotenv()
 
@@ -46,7 +47,13 @@ CREDENTIALS = UsmUserData(
     privProtocol = usmAesCfb128Protocol,
     authProtocol = usmHMACMD5AuthProtocol
 )
-
+SYS_DESCR = '1.3.6.1.2.1.1.1.0'
+IF_NAME = '1.3.6.1.2.1.31.1.1.1.1.'
+IF_ALIAS = '1.3.6.1.2.1.31.1.1.1.18.'
+IF_DESCR = '1.3.6.1.2.1.2.2.1.2'
+LLDP_REM_SYS_DESC = '1.0.8802.1.1.2.1.4.1.1.9'
+LLDP_LOC_PORT_ID = '1.0.8802.1.1.2.1.3.7.1.4.'
+LLDP_LOC_PORT_SUBTYPE = '1.0.8802.1.1.2.1.3.7.1.3.'
 
 async def main() -> None:
     while True:
@@ -82,32 +89,30 @@ async def main() -> None:
             except Exception:
                 print(f"Issue with {switch}")
 
-        print('\n')
+        print()
         for switch in pingable_switches:
             print("---------------------------------------------------")
             print(f"Removing AP port names on {switch}...")
-            await port_cleaning(switch)
-            print("---------------------------------------------------")
+            await cleaning_ports(switch)
+            print()
             print(f"Renaming ports on {switch}...")
             await renaming_ports(switch)
             print("---------------------------------------------------")
-            print('\n')
 
 
 # this function will go through all the ports that have the AP naming convention already configured, and clear the names.
 # it's called first so we have a clean slate to go through and rename the ports.
-async def port_cleaning(switch: str) -> None:
+async def cleaning_ports(switch: str) -> None:
     transport_target = await UdpTransportTarget.create((switch, 161))
 
     port_infdesc = []
-    if_name_oid = "1.3.6.1.2.1.31.1.1.1.18." # ifAlias OID
 
     iterator = walk_cmd(
         SNMP_ENGINE,
         CREDENTIALS,
         transport_target,
         ContextData(),
-        ObjectType(ObjectIdentity(if_name_oid)),
+        ObjectType(ObjectIdentity(IF_ALIAS)),
         lexicographicMode = False 
     )
 
@@ -125,12 +130,30 @@ async def port_cleaning(switch: str) -> None:
                     port_infdesc.append([str(oid).split('.')[-1], str(value)])
     
     for port, name in port_infdesc:
+        iterator = await get_cmd(
+            SNMP_ENGINE,
+            CREDENTIALS,
+            transport_target,
+            ContextData(),
+            ObjectType(ObjectIdentity(IF_NAME + port))
+        )
+
+        port_string = ""
+        errorIndication, errorStatus, errorIndex, varBinds = iterator
+        if errorIndication:
+            print(f"Error indication: {errorIndication}")
+        elif errorStatus:
+            print(f"Error status: {str(errorStatus)} at {errorIndex}")
+        else:
+            for varBind in varBinds:
+                port_string = str(varBind[1])
+
         iterator = await set_cmd(
             SNMP_ENGINE,
             CREDENTIALS,
             transport_target,
             ContextData(),
-            ObjectType(ObjectIdentity(if_name_oid + port), OctetString(" "))
+            ObjectType(ObjectIdentity(IF_ALIAS + port), OctetString(" "))
         )
         errorIndication, errorStatus, errorIndex, varBinds = iterator
         if errorIndication:
@@ -138,11 +161,12 @@ async def port_cleaning(switch: str) -> None:
         elif errorStatus:
             print(f"Error status: {str(errorStatus)} at {errorIndex}")
         else:
-            print(f"Removed name \"{name}\" on port {await convert_to_port(switch, port)}")
+            print(f"Port {port_string} name removed: {name}")
 
 
 # this function does the actual renaming.
 # for the 5420 switches, it will have to go back and remove the display-string name, since that OID will rename both the display-string and description-string.
+# it will then save the configuration using RPC calls for EXOS and netmiko for non-EXOS
 async def renaming_ports(switch: str) -> None:
     vendor_name, lldp_dict = await finding_port_oid(switch)
 
@@ -154,7 +178,7 @@ async def renaming_ports(switch: str) -> None:
             CREDENTIALS,
             transport_target,
             ContextData(),
-            ObjectType(ObjectIdentity("1.3.6.1.2.1.31.1.1.1.18." + port_info[0]), OctetString(name)) # ifAlias OID
+            ObjectType(ObjectIdentity(IF_ALIAS + port_info[0]), OctetString(name)) 
         )
 
         errorIndication, errorStatus, errorIndex, varBinds = iterator
@@ -167,45 +191,42 @@ async def renaming_ports(switch: str) -> None:
             for varBind in varBinds:
                 value = str(varBind[1])
                 print(f"Port {port_info[1]} name changed to: {value}")
-    
-    commands_list = [""]
+
+    print()
+    device = {
+            'host': switch,
+            'username': os.getenv("SWITCH_USER"),
+            'password': os.getenv("SWITCH_PASS"),
+            'fast_cli': True,
+    }
+
     if vendor_name and "Engine" in ' '.join(vendor_name):
-        for name, port_info in lldp_dict.items():
+        print("Removing display-string from EXOS switch and saving configuration...")
+        device['device_type'] = 'extreme_exos'
+
+        commands_list = []
+        for _, port_info in lldp_dict.items():
             commands_list.append(f"unconfigure ports {port_info[1]} display-string")
-        command_cmd = ';'.join(commands_list).strip(';')
-        commands = [command_cmd]
 
+        try:       
+            with ConnectHandler(**device) as net_connect:
+                for command in commands_list:
+                    net_connect.send_command(command)
+                net_connect.save_config()
+                print(f"Display-strings removed and saved configuration")
+        except Exception as e:
+            print(f"ERROR: Saving has failed, manual save is needed on {switch}")
+    else:
+        print(f"Saving config on ERS {switch}...")
+        device['device_type'] = 'extreme_ers'
 
-        url = f"http://{switch}/jsonrpc/"
-        switch_user = os.getenv("SWITCH_USER")
-        switch_pass = os.getenv("SWITCH_PASS")
-        
-        if not switch_user or not switch_pass:
-            print("Error: SWITCH_USER and SWITCH_PASS environment variables must be set")
-            return
-        
-        auth = (switch_user, switch_pass)
-
-        payload = {
-            "jsonrpc": "2.0",
-            "method": "cli",
-            "params": commands,
-            "id": 1
-        }
-        
-        async with httpx.AsyncClient(auth=auth) as client:
-            try:
-                response = await client.post(url, json=payload, timeout=30.0)
-                response.raise_for_status()
-
-                result = response.json()
-                if "error" in result:
-                    print(f"Switch error: {result['error']}")
-                else:
-                    print(f"Success on removing display-strings")
-            except httpx.RequestError as exc:
-                print(f"An error occured while requesting {exc.request.url!r}: {exc}")
-        
+        try:
+            with ConnectHandler(**device) as net_connect:
+                net_connect.find_prompt()
+                net_connect.save_config()
+                print(f"Configuration saved")
+        except Exception as e:
+            print(f"ERROR: Saving has failed, manual save is needed on {switch}")
 
 
 # this function is for finding the lldp neighbors and which port number it's on
@@ -225,7 +246,7 @@ async def finding_port_oid(switch: str) -> tuple[list[str] | None, dict[str, lis
         CREDENTIALS,
         transport_target,
         ContextData(),
-        ObjectType(ObjectIdentity('1.3.6.1.2.1.1.1.0')) # sysDescr OID
+        ObjectType(ObjectIdentity(SYS_DESCR)) # sysDescr OID
     )
 
     errorIndication, errorStatus, errorIndex, varBinds = iterator
@@ -242,7 +263,7 @@ async def finding_port_oid(switch: str) -> tuple[list[str] | None, dict[str, lis
         CREDENTIALS,
         transport_target,
         ContextData(),
-        ObjectType(ObjectIdentity("1.0.8802.1.1.2.1.4.1.1.9")), # lldpRemSysDesc OID
+        ObjectType(ObjectIdentity(LLDP_REM_SYS_DESC)), # lldpRemSysDesc OID
         lexicographicMode = False 
     )
 
@@ -266,13 +287,13 @@ async def finding_port_oid(switch: str) -> tuple[list[str] | None, dict[str, lis
 
     port_numbers_string = []
     if vendor_name and "Avaya" in vendor_name:
-        for port_parts in lldp_index:
+        for port_parts_vendor in lldp_index:
             iterator = await get_cmd(
                 SNMP_ENGINE,
                 CREDENTIALS,
                 transport_target,
                 ContextData(),
-                ObjectType(ObjectIdentity("1.0.8802.1.1.2.1.3.7.1.4." + port_parts)) # lldpLocPortId OID
+                ObjectType(ObjectIdentity(LLDP_LOC_PORT_ID + port_parts_vendor)) # lldpLocPortId OID
             )
 
             errorIndication, errorStatus, errorIndex, varBinds = iterator
@@ -290,13 +311,13 @@ async def finding_port_oid(switch: str) -> tuple[list[str] | None, dict[str, lis
                         port = "1/" + vendor_parts[1]
                         port_numbers_string.append(port)
     else:
-        for port_parts in lldp_index:
+        for port_parts_vendor in lldp_index:
             iterator = await get_cmd(
                 SNMP_ENGINE,
                 CREDENTIALS,
                 transport_target,
                 ContextData(),
-                ObjectType(ObjectIdentity("1.0.8802.1.1.2.1.3.7.1.3." + port_parts)) # lldpLocPortIdSubtype OID
+                ObjectType(ObjectIdentity(LLDP_LOC_PORT_SUBTYPE + port_parts_vendor)) # lldpLocPortIdSubtype OID
             )
 
             errorIndication, errorStatus, errorIndex, varBinds = iterator
@@ -314,7 +335,7 @@ async def finding_port_oid(switch: str) -> tuple[list[str] | None, dict[str, lis
         CREDENTIALS,
         transport_target,
         ContextData(),
-        ObjectType(ObjectIdentity("1.3.6.1.2.1.2.2.1.2")), # ifDescr OID
+        ObjectType(ObjectIdentity(IF_DESCR)), # ifDescr OID
         lexicographicMode = False # this stops the WALK command from going to the next OID outside the scope of the LLDP OID.
     )
 
@@ -329,30 +350,30 @@ async def finding_port_oid(switch: str) -> tuple[list[str] | None, dict[str, lis
             print(f"Error status: {str(errorStatus)} at {errorIndex}")
         else:
             for varBind in varBinds:
-                port_parts_vendor = str(varBind[0]).split('.')
-                index_oid = str(varBind[1]).split(" ")
+                index_oid = str(varBind[0]).split('.')
+                port_parts_vendor = str(varBind[1]).split(' ')
 
-                if "Avaya" in index_oid:
-                    if "Unit" in index_oid:
-                        port = index_oid[-4] + "/" + index_oid[-2]
-                        all_index[port] = port_parts_vendor[-1]
+                if "Avaya" in port_parts_vendor:
+                    if "Unit" in port_parts_vendor:
+                        port = port_parts_vendor[-5] + "/" + port_parts_vendor[-3]
+                        all_index[port] = index_oid[-1]
                     else:
-                        port = "1/" + index_oid[-3]
-                        all_index[port] = port_parts_vendor[-1]
-                elif "Extreme" in index_oid:
-                    if "Unit" in index_oid:
-                        port = index_oid[-4] + "/" + index_oid[-2]
-                        all_index[port] = port_parts_vendor[-1]
+                        port = "1/" + port_parts_vendor[-3]
+                        all_index[port] = index_oid[-1]
+                elif "Extreme" in port_parts_vendor:
+                    if "Unit" in port_parts_vendor:
+                        port = port_parts_vendor[-4] + "/" + port_parts_vendor[-2]
+                        all_index[port] = index_oid[-1]
                     else:
-                        port = "1/" + index_oid[-2]
-                        all_index[port] = port_parts_vendor[-1]
+                        port = "1/" + port_parts_vendor[-2]
+                        all_index[port] = index_oid[-1]
                 else:
-                    if "Stack" in index_oid:
-                        port = index_oid[-1]
-                        all_index[port] = port_parts_vendor[-1]
+                    if "Stack" in port_parts_vendor:
+                        port = port_parts_vendor[-1]
+                        all_index[port] = index_oid[-1]
                     else:
-                        port = index_oid[-1]
-                        all_index[port] = port_parts_vendor[-1]
+                        port = port_parts_vendor[-1]
+                        all_index[port] = index_oid[-1]
                         
     index_port = []
     for port in port_numbers_string:
@@ -363,30 +384,6 @@ async def finding_port_oid(switch: str) -> tuple[list[str] | None, dict[str, lis
 
     return vendor_name, lldp_final
 
-
-# this function is used only to convert the port oid to a readable port number.
-async def convert_to_port(switch: str, oid: str) -> str:
-    transport_target = await UdpTransportTarget.create((switch, 161))
-
-    iterator = await get_cmd(
-        SNMP_ENGINE,
-        CREDENTIALS,
-        transport_target,
-        ContextData(),
-        ObjectType(ObjectIdentity("1.3.6.1.2.1.31.1.1.1.1." + oid)) # ifName OID
-    )
-
-    value = ""
-    errorIndication, errorStatus, errorIndex, varBinds = iterator
-    if errorIndication:
-        print(f"Error indication: {errorIndication}")
-    elif errorStatus:
-        print(f"Error status: {str(errorStatus)} at {errorIndex}")
-    else:
-        for varBind in varBinds:
-            value = str(varBind[1])
-
-    return value
 
 SNMP_ENGINE.close_dispatcher()
 
