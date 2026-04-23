@@ -26,11 +26,10 @@ func main() {
 
 	// fmt.Println(input)
 	g := &gosnmp.GoSNMP{
-		Target:  os.Getenv("SWITCH_IP"),
-		Port:    161,
-		Version: gosnmp.Version3,
-		Timeout: time.Duration(5),
-
+		Target:        os.Getenv("SWITCH_IP"),
+		Port:          161,
+		Version:       gosnmp.Version3,
+		Timeout:       time.Duration(5 * time.Second),
 		MsgFlags:      gosnmp.AuthPriv,
 		SecurityModel: gosnmp.UserSecurityModel,
 		SecurityParameters: &gosnmp.UsmSecurityParameters{
@@ -50,7 +49,7 @@ func main() {
 	oids := []string{SysDescription}
 	result, err := g.Get(oids)
 	if err != nil {
-		log.Fatal("ERROR: failed getting SNMP: %v", err)
+		log.Fatalf("ERROR: failed getting SNMP: %v", err)
 	}
 
 	for i, variable := range result.Variables {
