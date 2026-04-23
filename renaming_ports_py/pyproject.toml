@@ -1,0 +1,14 @@
+[project]
+name = "renaming-ports"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "cryptography>=46.0.5",
+    "dotenv>=0.9.9",
+    "mypy>=1.19.1",
+    "netmiko>=4.6.0",
+    "pyinstaller>=6.19.0",
+    "pysnmp>=7.1.22",
+]
