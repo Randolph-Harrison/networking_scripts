@@ -14,6 +14,14 @@ const (
 	SysDescription = "1.3.6.1.2.1.1.1.0"
 )
 
+var securityParameters = &gosnmp.UsmSecurityParameters{
+	UserName:                 os.Getenv("SNMP_USER"),
+	AuthenticationProtocol:   gosnmp.MD5,
+	AuthenticationPassphrase: os.Getenv("SNMP_PASS"),
+	PrivacyProtocol:          gosnmp.AES,
+	PrivacyPassphrase:        os.Getenv("SNMP_PRIV"),
+}
+
 func main() {
 	err := godotenv.Load()
 	if err != nil {
@@ -26,19 +34,13 @@ func main() {
 
 	// fmt.Println(input)
 	g := &gosnmp.GoSNMP{
-		Target:        os.Getenv("SWITCH_IP"),
-		Port:          161,
-		Version:       gosnmp.Version3,
-		Timeout:       time.Duration(5 * time.Second),
-		MsgFlags:      gosnmp.AuthPriv,
-		SecurityModel: gosnmp.UserSecurityModel,
-		SecurityParameters: &gosnmp.UsmSecurityParameters{
-			UserName:                 os.Getenv("SNMP_USER"),
-			AuthenticationProtocol:   gosnmp.MD5,
-			AuthenticationPassphrase: os.Getenv("SNMP_PASS"),
-			PrivacyProtocol:          gosnmp.AES,
-			PrivacyPassphrase:        os.Getenv("SNMP_PRIV"),
-		},
+		Target:             os.Getenv("SWITCH_IP"),
+		Port:               161,
+		Version:            gosnmp.Version3,
+		Timeout:            time.Duration(5 * time.Second),
+		MsgFlags:           gosnmp.AuthPriv,
+		SecurityModel:      gosnmp.UserSecurityModel,
+		SecurityParameters: securityParameters,
 	}
 	err = g.Connect()
 	if err != nil {
